@@ -1,0 +1,112 @@
+# -*- encoding: utf-8 -*-
+"""
+Copyright (c) 2019 - present AppSeed.us
+"""
+import datetime
+from apps import db
+'''
+Add your models below
+'''
+
+# Book Sample
+class Book(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(64))
+
+# League Sample
+class League(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(256))    
+
+# Balance Table
+class Balance(db.Model):
+    id = db.Column(db.Integer, primary_key=True)    
+    currency = db.Column(db.String(10))
+    avail_fund = db.Column(db.DECIMAL)
+    pending_fund = db.Column(db.DECIMAL)
+    datetime = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+# match Sample
+class Match(db.Model):
+    __tablename__ = "match"
+    id = db.Column(db.Integer, primary_key=True)
+    op_cmd_id = db.Column(db.Integer)
+    bet_cmd_id = db.Column(db.Integer)
+    league_name = db.Column(db.String(64))
+    home_name = db.Column(db.String(64))
+    away_name = db.Column(db.String(64))
+    home_score = db.Column(db.Integer)
+    away_score = db.Column(db.Integer)
+    match_status = db.Column(db.String(64))
+    match_minute = db.Column(db.String(64))
+    FT_1X2_C = db.Column(db.Text)
+    FT_OE_C = db.Column(db.Text)
+    FT_HDP_C = db.Column(db.Text)
+    FT_OU_C = db.Column(db.Text)
+    NextGoal_C = db.Column(db.Text)
+    FT_1X2 = db.Column(db.Text)
+    FT_OE = db.Column(db.Text)
+    FT_HDP = db.Column(db.Text)
+    FT_OU = db.Column(db.Text)
+    NextGoal = db.Column(db.Text)
+    last_matches = db.Column(db.Text)
+    live_stat = db.Column(db.Text)
+    cmd_result = db.Column(db.Integer, default = 0) # 0: not ordered yet
+    result_str = db.Column(db.Text)
+    updated_at = db.Column(db.DateTime, default=datetime.datetime.now())
+    created_at = db.Column(db.DateTime, default=datetime.datetime.now())
+    commands = db.relationship('OpCmd', backref='match', cascade='all, delete, delete-orphan')
+    bets = db.relationship('BetCmd', backref='match', cascade='all, delete, delete-orphan')
+
+'''
+CMD_MODE_GET_ALL_MATCH = 0
+CMD_MODE_SPORTS_REFRESH = 1
+CMD_MODE_ALL_ODDS_PAGE = 2
+CMD_MODE_1X2_ODDS_PAGE = 3
+CMD_MODE_GET_BALANCE = 4
+CMD_MODE_PAGE_TITLE = 5
+CMD_MODE_ACTION_MATCH = 6
+
+ACTION_MODE_ODDS_ONLY = 0
+ACTION_MODE_ODDS_STAT = 1
+ACTION_MODE_ODDS_INPLAY = 2
+ACTION_MODE_ODDS_BET = 3
+'''
+# Command Sample
+class OpCmd(db.Model):
+    __tablename__ = "opcmd"
+    id = db.Column(db.Integer, primary_key=True)
+    cmd_mode = db.Column(db.Integer, default=0) # 0:get all matches 
+    match_id = db.Column(db.Integer, db.ForeignKey('match.id'), nullable=True)
+    cmd_result = db.Column(db.Integer, default = 0) # not ordered yet
+    result_str = db.Column(db.Text)
+    action_mode = db.Column(db.Integer)
+    cmd_result = db.Column(db.Integer, default = 0) # not ordered yet
+    result_str = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+# Bet Sample
+class BetCmd(db.Model):
+    __tablename__ = "betcmd"
+    id = db.Column(db.Integer, primary_key=True)
+    bet_mode = db.Column(db.Integer, default=0)    #0:test, 1:live
+    match_id = db.Column(db.Integer, db.ForeignKey('match.id'), nullable=False)    
+    bet_result = db.Column(db.Integer, default = 0) # not ordered yet
+    result_str = db.Column(db.Text)
+    home_score = db.Column(db.Integer)
+    away_score = db.Column(db.Integer)
+    match_status = db.Column(db.String(64))
+    match_minute = db.Column(db.String(64))
+    FT_1X2 = db.Column(db.Text)     # odd values at the moment of bet 
+    FT_OE = db.Column(db.Text)
+    FT_HDP = db.Column(db.Text)
+    FT_OU = db.Column(db.Text)
+    NextGoal = db.Column(db.Text)
+    data_bt = db.Column(db.Integer)     #1:ft_hdp, 2:ft_oe, 3:ft_ou, 5:ft_1x2, 22:next_goal
+    item = db.Column(db.String(10))
+    goal = db.Column(db.String(10))
+    old_odd = db.Column(db.String(10))
+    bet_value = db.Column(db.Integer)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    
+    

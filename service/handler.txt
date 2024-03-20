@@ -1,0 +1,523 @@
+import os
+import sqlite3
+import datetime
+import json
+import subprocess as sp
+
+"""
+database code
+"""
+db_url = "../Server/apps/bk8.sqlite3"
+
+def create_table():
+    conn = sqlite3.connect(db_url)
+
+    cursor = conn.cursor()
+
+    query = '''
+	    CREATE TABLE IF NOT EXISTS student(
+	    	id INTEGER PRIMARY KEY, 
+	    	roll INTEGER, 
+	    	name TEXT,
+	        phone TEXT
+	    )
+	'''
+
+    cursor.execute(query)
+
+    conn.commit()
+    conn.close()
+
+def add_command(cmd_mode, match_id=None, action_mode=None):
+    conn = sqlite3.connect(db_url)
+
+    cursor = conn.cursor()
+
+    query = '''
+	    INSERT INTO OpCmd( cmd_mode, match_id, action_mode )
+	    	        VALUES ( ?,?,? )
+	'''
+
+    cursor.execute(query, (cmd_mode, match_id, action_mode))
+
+    conn.commit()
+    conn.close()
+
+def add_student(roll, name, phone):
+    conn = sqlite3.connect(db_url)
+
+    cursor = conn.cursor()
+
+    query = '''
+	    INSERT INTO student( roll, name, phone )
+	    	        VALUES ( ?,?,? )
+	'''
+
+    cursor.execute(query, (roll, name, phone))
+
+    conn.commit()
+    conn.close()
+
+
+def get_students():
+    conn = sqlite3.connect(db_url)
+
+    cursor = conn.cursor()
+
+    query = '''
+	    SELECT roll, name, phone
+	    FROM student
+	'''
+
+    cursor.execute(query)
+    all_rows = cursor.fetchall()
+
+    conn.commit()
+    conn.close()
+
+    return all_rows
+
+
+def get_student_by_roll(roll):
+    conn = sqlite3.connect(db_url)
+
+    cursor = conn.cursor()
+
+    query = '''
+	    SELECT roll, name, phone
+	    FROM student
+	    WHERE roll = {}
+	'''.format(roll)
+
+    cursor.execute(query)
+    all_rows = cursor.fetchall()
+
+    conn.commit()
+    conn.close()
+
+    return all_rows
+
+
+def update_student(roll, name, phone):
+    conn = sqlite3.connect(db_url)
+
+    cursor = conn.cursor()
+
+    query = '''
+	    UPDATE student
+	    SET name = ?, phone = ?
+	    WHERE roll = ?
+	'''
+
+    cursor.execute(query, (name, phone, roll))
+
+    conn.commit()
+    conn.close()
+
+
+def delete_student(roll):
+    conn = sqlite3.connect(db_url)
+
+    cursor = conn.cursor()
+
+    query = '''
+	    DELETE
+	    FROM student
+	    WHERE roll = {}
+	'''.format(roll)
+
+    cursor.execute(query)
+    all_rows = cursor.fetchall()
+
+    conn.commit()
+    conn.close()
+
+    return all_rows
+
+
+create_table()
+
+"""
+main code
+"""
+
+
+def get_data():
+    return get_students()
+
+
+def show_data():
+    students = get_data()
+    for student in students:
+        print(student)
+
+
+def show_data_by_id(id_):
+    students = get_student_by_roll(id_)
+    if not students:
+        print("No data found at roll", id_)
+    else:
+        print(students)
+
+
+def select():
+    # sp.call('clear', shell=True)
+    os.system('cls')
+    print("\nSelect menu number : ")
+    print("\n\t 1. Show OpCmd\t\t 2. Add OpCmd")
+    print("\t 3. Show BetCmd\t\t 4. Add BetCmd")
+    print("\t 5. Show Matches")
+    print("\t 6. Exit")
+    sel = input("\nOption : ")
+
+    if sel == '1':
+        # sp.call('clear', shell=True)
+        show_data()
+        input("\n\npress enter to back:")
+    elif sel == '2':
+        # sp.call('clear', shell=True)
+        cmd_mode = 0
+        match_id = None
+        action_mode = None
+        while True:
+            try:
+                cmd_mode = int(input('\tcmd_mode: '))
+                break
+            except:
+                pass
+        if cmd_mode == 6:
+            while True:
+                try:
+                    match_id = int(input('\tmatch_id: '))
+                    # check the match id exist in the db
+                    query = "SELECT * FROM match where id = "
+                    break
+                except:
+                    pass
+
+            while True:
+                try:
+                    action_mode = int(input('\taction_mode: '))
+                    if action_mode < 0 and action_mode > 6:
+                        continue
+                    break
+                except:
+                    pass
+        add_command(cmd_mode, match_id, action_mode)
+
+    elif sel == '3':
+        # sp.call('clear', shell=True)
+        id__ = int(input('Enter Id: '))
+        show_data_by_id(id__)
+        input("\n\npress enter to back:")
+    elif sel == '4':
+        # sp.call('clear', shell=True)
+        id__ = int(input('Enter Id: '))
+        show_data_by_id(id__)
+        print()
+        name = input('Name: ')
+        phone = input('phone: ')
+        update_student(id__, name, phone)
+        input("\n\nYour data has been updated \npress enter to back:")
+    elif sel == '5':
+        # sp.call('clear', shell=True)
+        id__ = int(input('Enter Id: '))
+        show_data_by_id(id__)
+        delete_student(id__)
+        input("\n\nYour data has been deleted \npress enter to back:")
+    else:
+        return 0
+    return 1
+
+
+class Inspector:
+    db_url = ""
+    conn = None
+    cursor = None
+    def __init__(self, db_url):
+        db_url = db_url
+        self.conn = sqlite3.connect(db_url)
+        self.conn.row_factory = sqlite3.Row
+        self.cursor = self.conn.cursor()
+        
+
+    def show_commands(self, top_n = 10):
+        query = '''SELECT * FROM OpCmd ORDER BY created_at DESC LIMIT {}'''.format(top_n)
+        self.cursor.execute(query)
+        all_cmds = self.cursor.fetchall()
+        self.conn.commit()
+        print("%-5s | %-9s | %-9s | %-12s | %-11s | %-27s | %s" % ('id', 'c_mode', 'm_id', 'act_mode', 'cmd_res', 'created_at', 'res_str'))
+        print(150*"=")
+        for cmd in all_cmds:
+            cmd = [col if col is not None else "" for col in cmd]
+            print("%-5s | %-9s | %-9s | %-12s | %-11s | %-27s | %s" % (cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[6], cmd[5]))
+            print(150*"-")
+
+    def show_bets(self, top_n = 10):
+        query = '''SELECT * FROM BetCmd ORDER BY created_at DESC LIMIT {}'''.format(top_n)
+        self.cursor.execute(query)
+        all_cmds = self.cursor.fetchall()
+        self.conn.commit()
+        print("%-5s | %-9s | %-9s | %-9s | %-2s | %-2s | %-9s | %-9s | %-9s | %-9s | %-9s | %s" % ('id', 'mode', 'match_id', 'b_res', 'h', 'a', 'data_bt', 'item', 'goal', 'old_odd', 'b_value', 'created_at'))
+        print(120*"=")
+        for cmd in all_cmds:
+            match_id = cmd['match_id']
+            match = self.get_match(match_id)
+            # cmd = [col if col is not None else "" for col in cmd]3
+            print("%-5s | %-9s | %-9s | %-9s | %-2s | %-2s | %-9s | %-9s | %-9s | %-9s | %-9s | %s" % (cmd['id'], cmd['bet_mode'], cmd['match_id'], cmd['bet_result'], match['home_score'], match['away_score'], cmd['data_bt'], cmd['item'], cmd['goal'], cmd['old_odd'], cmd['bet_value'], cmd['created_at'][:16]))
+            print(120*"-")
+
+    def show_matches(self, top_n = 20):
+        query = '''SELECT * FROM match ORDER BY updated_at DESC LIMIT {}'''.format(top_n)
+        self.cursor.execute(query)
+        matches = self.cursor.fetchall()
+        
+        print("%-5s | %-20s | %-25s | %-25s | %-8s | %-8s | %-3s | %-3s | %-16s | %s" % ('id', 'league_name', 'home_name', 'away_name', 'status', 'minute', 'h_s', 'a_s', 'updated_at', 'FT_1X2'))
+        print(150*"=")
+        for match in matches:
+            # match = [col if col is not None else "" for col in match]
+            print("%-5s | %-20s | %-25s | %-25s | %-8s | %-8s | %-3s | %-3s | %-16s | %s" % (match['id'], match['league_name'][:20], match['home_name'], match['away_name'], match['match_status'], match['match_minute'], match['home_score'], match['away_score'], match['updated_at'][:16], match['FT_1X2_C']))
+            print(150*"-")
+
+    def add_command(self, cmd_mode, match_id=None, action_mode=None):        
+        query = '''
+            INSERT INTO OpCmd( cmd_mode, match_id, action_mode, created_at )
+                        VALUES ( ?,?,?,? )
+        '''
+        self.cursor.execute(query, (cmd_mode, match_id, action_mode, datetime.datetime.now()))
+        self.conn.commit()
+
+    def add_betcmd(self, match_id, data_bt, item, goal, bet_value, bet_mode=0):
+        match = self.get_match(match_id)  
+        is_valid = False 
+        old_odd = "1.0"
+        try:
+            if data_bt == 5:
+                odd_json = json.loads(match['FT_1X2_C'])
+                print(odd_json)
+                if len(odd_json) > 0 and odd_json[0][item] != None:
+                    is_valid = True
+                    old_odd = odd_json[0][item]
+                    print(odd_json[0][item])
+                    
+
+            elif data_bt in [1, 3]:
+                odd_json = {}
+                if data_bt == 1:
+                    odd_json = json.loads(match['FT_HDP_C'])
+                elif data_bt == 3:
+                    odd_json = json.loads(match['FT_OU_C'])
+                print(odd_json)
+                for bet in odd_json:
+                    if bet['home'] != None and bet['away'] != None:
+                        if bet['home']['goal'] == goal or bet['away']['goal'] == goal:
+                            is_valid = True
+                            old_odd = str(bet[item]['odd'])
+                            print(bet[item]['odd'])
+
+        except:
+            pass
+        if is_valid:
+            query = '''
+                INSERT INTO BetCmd( bet_mode, match_id, data_bt, item, goal, bet_value, old_odd, created_at )
+                            VALUES ( ?,?,?,?,?,?,?,? )
+            '''
+            self.cursor.execute(query, (bet_mode, match_id, data_bt, item, goal, bet_value, old_odd, datetime.datetime.now()))
+            self.conn.commit()
+
+    def get_match(self, match_id):
+        query = '''SELECT * FROM match WHERE id = {}'''.format(match_id)
+        self.cursor.execute(query)
+        match = self.cursor.fetchone()
+        if match:
+            return match
+        else:
+            return None
+    def run(self):
+        while True:
+            # os.system('cls')
+            print("\n"+100*"*")
+            print("Select menu number : ")
+            print("\t1. Show Ocmd\t2. Add Ocmd\t3. Show Bcmd\t4. Add Bcmd\t5. Show Matches\t 6. Remove")
+            print("\t7. Exit")
+            sel = input("\nOption : ")
+
+            if sel == '1':
+                top_n = 10
+                while True:
+                    try:
+                        top_n = int(input('\ttop n: '))  
+                        break                      
+                    except:
+                        pass
+                self.show_commands(top_n)
+            elif sel == '2':
+                # sp.call('clear', shell=True)
+                cmd_mode = 0
+                match_id = None
+                action_mode = None
+                while True:
+                    try:
+                        cmd_mode = int(input('\tcmd_mode: '))
+                        if cmd_mode > -1 and cmd_mode < 8:
+                            break
+                    except:
+                        pass
+                if cmd_mode == 6:
+                    while True:
+                        try:
+                            match_id = int(input('\tmatch_id: '))
+                            if match_id == -1:
+                                break
+                            # check the match id exist in the db
+                            match = self.get_match(match_id)
+                            if match:
+                                break
+                            else:
+                                continue
+                        except:
+                            pass
+                    if match_id == -1:
+                        continue
+                    while True:
+                        try:
+                            action_mode = int(input('\taction_mode: '))
+                            if action_mode < 0 or action_mode > 2:
+                                continue
+                            break
+                        except:
+                            pass
+                self.add_command(cmd_mode, match_id, action_mode)
+            elif sel == '3':
+                top_n = 10
+                while True:
+                    try:
+                        top_n = int(input('\ttop n: '))  
+                        break                      
+                    except:
+                        pass
+                self.show_bets(top_n)
+            elif sel == '4':
+                # sp.call('clear', shell=True)
+                bet_mode = 0
+                match_id = None
+                data_bt = None
+                item = None
+                goal = None
+                bet_value = 50
+                while True:
+                    try:
+                        bet_mode = int(input('\tb_mode: '))
+                        if bet_mode in [0, 1]:
+                            break
+                    except:
+                        pass
+
+                while True:
+                    try:
+                        match_id = int(input('\tmatch_id: '))
+                        if match_id == -1:
+                            break
+                        # check the match id exist in the db
+                        match = self.get_match(match_id)
+                        if match:
+                            break
+                        else:
+                            continue
+                    except:
+                        pass
+                
+                while True:
+                    try:
+                        data_bt = int(input('\tdata_bt: '))
+                        if data_bt in [1,2,3,5,22]:
+                            break
+                    except:
+                        pass
+                
+                while True:
+                    item = input("\titem: ")
+                    if data_bt in [5, 22] and item in ['1', '2', 'x']:
+                        break
+                    elif data_bt in [2, 3, 1] and item in ['home', 'away']:
+                        break              
+                if data_bt in [1, 2, 3]:
+                    goal = input("\tgoal: ")
+                while True:
+                    try:
+                        bet_value = int(input("\tb_value: "))
+                        if bet_value < 5:
+                            bet_value = 5                      
+                        break
+                    except:
+                        pass
+                
+                self.add_betcmd(match_id, data_bt, item, goal, bet_value, bet_mode)
+            elif sel == "5":
+                match_id = int(input('\tmatch_id: '))
+                if match_id == -1:
+                    # show all matches
+                    top_n = 10
+                    while True:
+                        try:
+                            top_n = int(input('\ttop n: '))  
+                            break                      
+                        except:
+                            pass  
+                    self.show_matches(top_n=top_n)                  
+                else:
+                    match = self.get_match(match_id)
+                    if match:
+                        print("%-5s | %-20s | %-20s | %-20s | %-5s | %-5s | %-5s | %-5s" % (match['id'], match['league_name'][:20], match['home_name'], match['away_name'], match['match_status'], match['match_minute'], match['home_score'], match['away_score']))
+                        print("%-10s 5: %s" % ("FT_1X2_O", match['FT_1X2']))
+                        print("%-10s 5: %s" % ("FT_1X2_C", match['FT_1X2_C']))
+                        print("%-10s 2: %s" % ("FT_OE", match['FT_OE_C']))
+                        print("%-10s 3: %s" % ("FT_OU", match['FT_OU_C']))
+                        print("%-10s 1: %s" % ("FT_HDP", match['FT_HDP_C']))
+                        print("%-10s22: %s" % ("NextGoal", match['NextGoal_C']))
+                        print("%-10s: %s" % ("live stat", match['live_stat']))
+                    else:
+                        input("No Match on the id.")
+            elif sel == "6":
+                tbl_name = ""
+                id = -1
+
+                while True:
+                    try:
+                        tbl_name = input('\ttable_name: ')
+                        if tbl_name.lower() in ["betcmd", "opcmd", "match"]:
+                            break
+                    except:
+                        pass
+                while True:
+                    try:
+                        id = int(input('\tid: '))
+                        break
+                    except:
+                        pass
+
+                if id == -1:
+                    query = "DELETE FROM " + tbl_name + ";"
+                    print(query)
+                    try:
+                        self.cursor.execute(query)
+                        self.conn.commit()
+                        print("all removed successfully")
+                    except Exception as e:
+                        print(e)
+                        print("error while remove")
+                else:
+                    query = "DELETE FROM " + tbl_name + " WHERE id = " + str(id)
+                    try:
+                        self.cursor.execute(query)
+                        self.conn.commit()
+                        print("removed successfully")
+                    except:
+                        print("error while remove")
+            elif sel == "7":
+                break
+            else:
+                continue
+
+bk8_watcher = Inspector(db_url)
+bk8_watcher.run()

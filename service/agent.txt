@@ -1,0 +1,1236 @@
+import os
+import time
+from queue import Queue
+from threading import Thread
+import json
+import requests
+
+from selenium import webdriver
+from selenium.common import exceptions
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+from selenium.webdriver.firefox.service import Service as FService
+from selenium.webdriver.chrome.service import Service as CService
+# firefox_service = FService(r"./geckodriver.exe")
+chrome_service = CService(r"./chromedriver")
+
+# USERNAME = 'adrieltan1983'
+# PASSWORD = '4MPetrof'
+USERNAME = 'huypham123x'
+PASSWORD = '123456zxC'
+api_endpoint = "http://localhost:5001/api/"
+api_key = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoxLCJpbml0X2RhdGUiOjE3MDc3OTEzNTd9._8qZTJhCz3VrBdfvEgZJ142Wnz4BmzCTZa-WBehMU7c'
+api_header = {"Content-Type": "application/json", "Authorization": api_key}
+
+CMD_MODE_GET_ALL_MATCH = 0
+CMD_MODE_SPORTS_REFRESH = 1
+CMD_MODE_ALL_ODDS_PAGE = 2
+CMD_MODE_1X2_ODDS_PAGE = 3
+CMD_MODE_GET_BALANCE = 4
+CMD_MODE_PAGE_TITLE = 5
+CMD_MODE_ACTION_MATCH = 6
+CMD_MODE_GET_LIVE_MATCHES = 7
+
+ACTION_MODE_ODDS_ONLY = 0
+ACTION_MODE_ODDS_STAT = 1
+ACTION_MODE_ODDS_INPLAY = 2
+ACTION_MODE_ODDS_BET = 3
+
+WAIT_LONG = 30
+WAIT_MID = 20
+WAIT_SHORT = 10
+
+current_nav = 0
+
+
+chrome_options = webdriver.ChromeOptions()
+chrome_options.add_argument("--headless")
+chrome_options.add_argument("--no-sandbox")
+# chrome_options.add_argument("disable-infobars")
+# chrome_options.add_argument("--disable-extensions")
+# chrome_options.add_argument("--disable-gpu")
+# chrome_options.add_argument("--disable-dev-shm-usage")
+chrome_options.add_argument("start-maximized")
+driver = webdriver.Chrome(service=chrome_service, options=chrome_options)
+
+# driver = webdriver.Firefox(service=firefox_service)
+
+window_deposit = None
+window_odds = None
+
+def getMatchDom(driver, l_name, h_name, a_name):
+    n_tries = 0
+    while True:
+        if n_tries > 3:
+            break
+        try:
+            leagues_dom = driver.find_elements(by=By.CLASS_NAME, value="c-league")
+            for league_dom in leagues_dom:
+                league_name = league_dom.find_element(by=By.CLASS_NAME, value="c-league__name").text
+                if league_name != l_name:
+                    continue
+                matches_dom = league_dom.find_elements(by=By.CLASS_NAME, value="c-match__bets")
+                for match_dom in matches_dom:
+                    # =========== Scrap Match Info =================
+                    teams_name = match_dom.find_elements(by=By.CLASS_NAME, value="c-team-name")
+
+                    if teams_name[0].text == h_name and teams_name[1].text == a_name:
+                        return match_dom
+        except exceptions.StaleElementReferenceException as estale:
+            print(f"######### E_stale_getmatchdom ######### {l_name}, {h_name}, {a_name}")
+            n_tries += 1
+            continue
+    return None
+
+def getAllMatchFT_1X2(driver, top_n = 0):
+    m_list = []
+    n_tries = 0
+    while True:
+        if n_tries > 2:
+            break
+        try:
+            m_list = []
+            # ========= Get all match list ========
+            l_doms = driver.find_elements(by=By.CLASS_NAME, value="c-league")
+            for l_dom in l_doms:
+                l_name = l_dom.find_element(by=By.CLASS_NAME, value="c-league__name").text
+
+                valid = True
+                for key in ["saba", "round", "corners", "home", "fantasy", "friend", "ore"]:
+                    if key in l_name.lower():
+                        valid = False
+                    if valid is False:
+                        break
+                if valid is False:
+                    continue
+
+                m_doms = l_dom.find_elements(by=By.CLASS_NAME, value="c-match__bets")
+                is_top = False
+                for m_dom in m_doms:
+                    match = {}
+                    match["league_name"] = l_name
+                    # =========== Scrap Match Info =================
+                    teams_name = m_dom.find_elements(by=By.CLASS_NAME, value="c-team-name")
+                    match["home_name"] = teams_name[0].text
+                    match["away_name"] = teams_name[1].text
+                    if "rea" in match['home_name'].lower() or "rea" in match['away_name'].lower():
+                        continue
+                    # =========== Scrap Match Info =================
+                    try:
+                        match_time = m_dom.find_element(by=By.CLASS_NAME, value="c-match-time")
+                        status_min = match_time.text.split("\n")
+                        match["match_status"] = status_min[0]
+                        match["match_minute"] = status_min[1] if len(status_min) > 1 else ""
+                    except Exception as e:  # in play match
+                        match_time = m_dom.find_element(by=By.CLASS_NAME, value="c-match-time__item")
+                        match["match_status"] = match_time.text
+                        match["match_minute"] = "00"
+
+                    try:
+                        match_score_container = m_dom.find_element(by=By.CLASS_NAME, value="c-match-score")
+                        match_score = match_score_container.find_elements(By.TAG_NAME, "span")
+                        match["home_score"] = match_score[0].text
+                        match["away_score"] = match_score[2].text
+                    except Exception as e:
+                        match["home_score"] = "0"
+                        match["away_score"] = "0"
+                    #=== Scrap FT_1X2 odds =========
+                    odds = m_dom.find_elements(by=By.CLASS_NAME, value='c-bettype-col')
+                    if len(odds) > 2:
+                        odd_home_dom = odds[0].find_element(by=By.CLASS_NAME, value="c-odds")
+                        odd_home = odd_home_dom.text
+                        odd_draw_dom = odds[1].find_element(by=By.CLASS_NAME, value="c-odds")
+                        odd_draw = odd_draw_dom.text
+                        odd_away_dom = odds[2].find_element(by=By.CLASS_NAME, value="c-odds")
+                        odd_away = odd_away_dom.text
+                        match["FT_1X2"] = json.dumps([{"1":odd_home, "2":odd_away, "x": odd_draw}])
+                        print("%-25s | %-25s" % (match['home_name'], match['away_name']),flush=True,end="\r")
+                        m_list.append(match)                        
+                        if top_n > 0 and len(m_list) > top_n:
+                            print("top_n is ", top_n,  len(m_list))
+                            is_top = True
+                            break
+                    else:
+                        pass
+                if is_top:
+                    break
+            break
+        except exceptions.StaleElementReferenceException as e_stale:
+            if len(m_list) > 10:
+                break
+            n_tries += 1
+            print("-------------n_tries increase--------", n_tries)
+
+        except Exception as e:
+            print(e)
+            if len(m_list) > 10:
+                break
+            n_tries += 1
+    m_list_reverse = m_list[::-1]
+    return m_list_reverse
+
+def getMatchStatistic(driver, l_name, h_name, a_name):
+    WebDriverWait(driver, 360).until(
+        EC.frame_to_be_available_and_switch_to_it((By.XPATH, "//frame")))
+    forms = driver.find_elements(by=By.CLASS_NAME, value="flex-xs-inline")
+    print(forms[0].text)
+    # ========= click Show more buttons ======
+    showmore_btns = WebDriverWait(driver, 10).until(
+        EC.presence_of_all_elements_located((By.XPATH,
+                                             "//button[text()='Show more']")))
+    init_cnt = len(showmore_btns)
+    wrong_cnt = 0
+    while True:
+        showmore_btns = WebDriverWait(driver, 10).until(
+            EC.presence_of_all_elements_located((By.XPATH, "//button[text()='Show more']")))
+        if len(showmore_btns) > 2:
+            showmore_btns[0].click()
+            time.sleep(1)
+            showmore_btns[1].click()
+        time.sleep(2)
+        if len(showmore_btns) == (init_cnt - 2):
+            break
+        wrong_cnt += 1
+        if wrong_cnt > 2:
+            break
+
+    # ======== Scrape Match history =========
+    tables = driver.find_elements(by=By.XPATH, value="//strong[text()='Last matches']//parent::div//parent::div//parent::div//parent::div//parent::div//parent::div//table")
+
+    table_home = tables[0]
+    table_away = tables[1]
+    home_last_match_doms = table_home.find_elements(by=By.XPATH, value="tbody/tr/td[5]/div")
+    away_last_match_doms = table_away.find_elements(by=By.XPATH, value="tbody/tr/td[5]/div")
+    home_last_matches = []
+    for last_m_dom in home_last_match_doms:
+        home_name = last_m_dom.find_element(by=By.XPATH, value="div[1]/div/div/div/div/div").text
+        home_score = last_m_dom.find_element(by=By.XPATH, value="div[2]/div/div/div[1]").text
+        away_score = last_m_dom.find_element(by=By.XPATH, value="div[2]/div/div/div[3]").text
+        away_name = last_m_dom.find_element(by=By.XPATH, value="div[3]/div/div/div/div/div").text
+        last_match = {}
+        last_match["home_name"] = home_name
+        last_match["home_score"] = home_score
+        last_match["away_score"] = away_score
+        last_match["away_name"] = away_name
+        home_last_matches.append(last_match)
+    away_last_matches = []
+    for last_m_dom in away_last_match_doms:
+        home_name = last_m_dom.find_element(by=By.XPATH, value="div[1]/div/div/div/div/div").text
+        home_score = last_m_dom.find_element(by=By.XPATH, value="div[2]/div/div/div[1]").text
+        away_score = last_m_dom.find_element(by=By.XPATH, value="div[2]/div/div/div[3]").text
+        away_name = last_m_dom.find_element(by=By.XPATH, value="div[3]/div/div/div/div/div").text
+        last_match = {}
+        last_match["home_name"] = home_name
+        last_match["home_score"] = home_score
+        last_match["away_score"] = away_score
+        last_match["away_name"] = away_name
+        away_last_matches.append(last_match)
+    last_matches = {"home":home_last_matches, "away": away_last_matches}
+    # ======== Close this page and back to Sports page
+    time.sleep(3)
+    return last_matches
+
+def driverAction(driver, match_cmd):
+    match = {}
+    if match_cmd is None:
+        return None
+    match["op_cmd_id"] = match_cmd["op_cmd_id"]
+    match["bet_cmd_id"] = match_cmd["bet_cmd_id"]
+    match["cmd_result"] = -1
+    match["result_str"] = ""
+
+    while True:
+        try:
+            match_dom = getMatchDom(driver, match_cmd["league_name"], match_cmd["home_name"], match_cmd["away_name"])
+            if match_dom:
+
+                match["league_name"] = match_cmd["league_name"]
+                match["home_name"] = match_cmd["home_name"]
+                match["away_name"] = match_cmd["away_name"]
+
+
+                # =========== Scrap Match Info =================
+                try:
+                    match_time = match_dom.find_element(by=By.CLASS_NAME, value="c-match-time")
+                    status_min = match_time.text.split("\n")
+                    match["match_status"] = status_min[0]
+                    match["match_minute"] = status_min[1] if len(status_min) > 1 else ""
+                except Exception as e:  # in play match
+                    match_time = match_dom.find_element(by=By.CLASS_NAME, value="c-match-time__item")
+                    match["match_status"] = match_time.text
+                    match["match_minute"] = "00"
+
+                try:
+                    match_score_container = match_dom.find_element(by=By.CLASS_NAME, value="c-match-score")
+                    match_score = match_score_container.find_elements(By.TAG_NAME, "span")
+                    match["home_score"] = match_score[0].text
+                    match["away_score"] = match_score[2].text
+                except Exception as e:
+                    match["home_score"] = "0"
+                    match["away_score"] = "0"
+
+                # ============== Scrap Odds =========
+                match["FT_HDP"] = []
+                match["FT_OU"] = []
+                match["FT_1X2"] = []
+                match["FT_OE"] = []
+                match["NextGoal"] = []
+                # match["1H_HDP"] = []
+                # match["1H_OU"] = []
+                # match["1H_1X2"] = []
+
+                match_odds = match_dom.find_elements(by=By.CLASS_NAME, value="c-match__odds")
+                for match_odd in match_odds:
+                    if not 'c-match__odds--more-lines' in match_odd.get_attribute('class'):
+                        bet_types = match_odd.find_elements(by=By.CLASS_NAME, value="c-bettype-col")
+                        for bet_type in bet_types:
+                            data_bt = bet_type.get_attribute('data-bt')
+                            if bet_type.text == "":
+                                continue
+
+                            if data_bt in ["5"]: #["5", "15", "22"]
+                                bet = {"1": "", "2": "", "x": ""}
+                                x12_bets = bet_type.find_elements(by=By.CLASS_NAME, value="c-odds-button")
+                                for x12_bet in x12_bets:
+                                    try:
+                                        odd = x12_bet.find_element(By.CLASS_NAME, value="c-odds").text
+                                        attr_x12 = x12_bet.get_attribute('id')
+                                        x12 = attr_x12[len(attr_x12) - 1]
+                                        bet[x12] = odd
+                                        if match_cmd["action_mode"] == ACTION_MODE_ODDS_BET:
+                                            for bet_cmd in match_cmd["bets"]:
+                                                if str(bet_cmd["data_bt"]) == "5" and bet_cmd["item"] == x12:
+                                                    # compare old odd value with current one
+
+                                                    # do Bet on the odd
+                                                    try:
+                                                        x12_bet.click()  # id = quickBetStake
+                                                        time.sleep(2)
+                                                        print("done click odd")
+                                                        bet_input = WebDriverWait(driver, WAIT_MID).until(
+                                                            lambda driver: driver.find_element(by=By.ID,
+                                                                                               value="betSlipStake"))
+                                                        webdriver.ActionChains(driver).move_to_element(
+                                                            bet_input).click(bet_input).perform()
+                                                        webdriver.ActionChains(driver).send_keys(str(bet_cmd["bet_value"])).perform()
+                                                        time.sleep(2)
+                                                        print("sent key")
+                                                        bet_btn = WebDriverWait(driver, WAIT_MID).until(
+                                                            EC.presence_of_element_located((By.CLASS_NAME, 'c-btn--bet')))
+                                                        # webdriver.ActionChains(driver).move_to_element(bet_btn).click(bet_btn).perform()
+                                                        driver.execute_script("arguments[0].click();", bet_btn)
+                                                        time.sleep(2)
+                                                        print("Clicked Bet")
+                                                        #---------------------------
+                                                        res = driver.execute_cdp_cmd('Page.captureSnapshot', {})
+                                                        # Write the file locally
+                                                        with open('./store/clickedBet.mhtml', 'w', newline='') as f:
+                                                            f.write(res['data'])
+                                                        #--------------------------
+                                                        try:
+                                                            confirm_btn = WebDriverWait(driver, WAIT_MID).until(
+                                                                EC.presence_of_element_located((By.XPATH,
+                                                                                                "//div[@id='singleBetSlipConfirm']/div[text()='Yes']")))
+                                                            # webdriver.ActionChains(driver).move_to_element(confirm_btn).click(confirm_btn).perform()
+                                                            driver.execute_script("arguments[0].click();", confirm_btn)
+                                                            print("Clicked Confirm")
+                                                        except:
+                                                            pass
+
+                                                        try:
+                                                            popup_dialog = WebDriverWait(driver, WAIT_MID).until(
+                                                                EC.presence_of_element_located(
+                                                                    (By.XPATH,
+                                                                     "//div[@id='popupPanel']//div[text()='OK']")))
+                                                            # popup_dialog.click()
+                                                            print("Ok dialog")
+                                                            driver.execute_script("arguments[0].click();", popup_dialog)
+                                                            match["cmd_result"] = 1     # Everything OK
+                                                            match["result_str"] = "Ok Bet"  # Everything OK
+                                                        except:
+                                                            match["cmd_result"] = 2     # Bet Done, But latest Dialog not closed
+                                                            match["result_str"] = "Ok Bet, but Dialog not closed"
+                                                            pass
+                                                    except exceptions.ElementClickInterceptedException as e_intercep_bet:
+                                                        print(e_intercep_bet)
+                                                        match["cmd_result"] = 3  # stale on bet element
+                                                        match["result_str"] = "Intercept odd btn"
+                                                        print("Intercept Bet Element")
+                                                    except exceptions.StaleElementReferenceException as e_stale_bet:
+                                                        print(e_stale_bet)
+                                                        match["cmd_result"] = 3  # stale on bet element
+                                                        match["result_str"] = "Stale odd btn"
+                                                        print("Stale Bet Element")
+                                                    except Exception as e_bet:
+                                                        print(e_bet)
+                                                        try:
+                                                            clear_btn = WebDriverWait(driver, WAIT_SHORT).until(
+                                                                EC.presence_of_element_located((By.CLASS_NAME, 'c-btn--clear')))
+                                                            # webdriver.ActionChains(driver).move_to_element(clear_btn).click(clear_btn).perform()
+                                                            driver.execute_script("arguments[0].click();", clear_btn)
+                                                        except:
+                                                            pass
+                                                        match["cmd_result"] = 4  # error while bet
+                                                        match["result_str"] = "Cancel Bet"
+                                                        print("Canceled Bet")
+
+                                    except exceptions.StaleElementReferenceException as e3:
+                                        continue
+                                if data_bt == "5":
+                                    match["FT_1X2"].append(bet)
+                                # elif data_bt == "15":
+                                #     match["1H_1X2"].append(bet)
+                                elif data_bt == "22":
+                                    match["NextGoal"].append(bet)
+
+                            if data_bt in ["1", "3", "2"]:  # ["1", "3", "2", "7", "8"]
+                                bet = {"home": {"goal": "", "odd": ""}, "away": {"goal": "", "odd": ""}}
+                                h_a_bets = bet_type.find_elements(by=By.CLASS_NAME, value="c-odds-button")
+                                goal = ""
+                                for h_a_bet in h_a_bets:
+                                    text_goal = "0"
+                                    odd = "0"
+                                    try:
+                                        text_goal = h_a_bet.find_element(By.CLASS_NAME,
+                                                                         value="c-text-goal").text
+                                    except Exception as e:
+                                        try:
+                                            text_goal = h_a_bet.find_element(By.CLASS_NAME,
+                                                                             value="c-text").text
+                                        except Exception as e1:
+                                            text_goal = ""
+                                    if text_goal != "" and text_goal != "u":
+                                        goal = text_goal
+
+                                for h_a_bet in h_a_bets:
+                                    try:
+                                        text_goal = "0"
+                                        odd = "0"
+                                        try:
+                                            text_goal = h_a_bet.find_element(By.CLASS_NAME,
+                                                                             value="c-text-goal").text
+                                        except Exception as e:
+                                            try:
+                                                text_goal = h_a_bet.find_element(By.CLASS_NAME,
+                                                                                 value="c-text").text
+                                            except Exception as e1:
+                                                text_goal = ""
+                                        print("text_goal from page ", text_goal)
+                                        odd = h_a_bet.find_element(By.CLASS_NAME, value="c-odds").text
+                                        bet_h_a = {"goal": text_goal, "odd": odd}
+                                        attr_h_a = h_a_bet.get_attribute('id')
+                                        h_a = attr_h_a[len(attr_h_a) - 1]
+                                        if h_a == "h":
+                                            bet["home"] = bet_h_a
+                                        elif h_a == "a":
+                                            bet["away"] = bet_h_a
+                                        if match_cmd["action_mode"] == ACTION_MODE_ODDS_BET:
+                                            for bet_cmd in match_cmd["bets"]:
+                                                print(bet_cmd["goal"], goal)
+                                                print(bet_cmd["item"][0], h_a)
+                                                if str(bet_cmd["data_bt"]) != "5" and bet_cmd["item"][0] == h_a and bet_cmd["goal"] == goal:
+                                                    # Compare Old odd with current
+
+                                                    # Do Bet
+                                                    print("Entered on main bt")
+                                                    # do Bet on the odd
+                                                    try:
+                                                        h_a_bet.click()  # id = quickBetStake
+                                                        time.sleep(2)
+                                                        print("done click odd")
+                                                        bet_input = WebDriverWait(driver, WAIT_MID).until(
+                                                            lambda driver: driver.find_element(by=By.ID, value="betSlipStake"))
+                                                        webdriver.ActionChains(driver).move_to_element(bet_input).click(bet_input).perform()
+                                                        webdriver.ActionChains(driver).send_keys(str(bet_cmd["bet_value"])).perform()
+                                                        time.sleep(2)
+                                                        print("sent key")
+                                                        bet_btn = WebDriverWait(driver, WAIT_MID).until(
+                                                            EC.presence_of_element_located((By.CLASS_NAME, 'c-btn--bet')))
+                                                        # webdriver.ActionChains(driver).move_to_element(bet_btn).click(bet_btn).perform()
+                                                        driver.execute_script("arguments[0].click();", bet_btn)
+                                                        time.sleep(2)
+                                                        # ---------------------------
+                                                        res = driver.execute_cdp_cmd('Page.captureSnapshot', {})
+                                                        # Write the file locally
+                                                        with open('./store/clickedBet.mhtml', 'w', newline='') as f:
+                                                            f.write(res['data'])
+                                                        # --------------------------
+                                                        print("Clicked Bet")
+                                                        try:
+                                                            confirm_btn = WebDriverWait(driver, WAIT_MID).until(
+                                                                EC.presence_of_element_located((By.XPATH,
+                                                                                                "//div[@id='singleBetSlipConfirm']/div[text()='Yes']")))
+                                                            # webdriver.ActionChains(driver).move_to_element(confirm_btn).click(confirm_btn).perform()
+                                                            driver.execute_script("arguments[0].click();", confirm_btn)
+                                                            print("Clicked Confirm")
+                                                        except:
+                                                            pass
+
+                                                        try:
+                                                            popup_dialog = WebDriverWait(driver, WAIT_MID).until(
+                                                                EC.presence_of_element_located(
+                                                                    (By.XPATH,
+                                                                     "//div[@id='popupPanel']//div[text()='OK']")))
+                                                            # popup_dialog.click()
+                                                            print("Ok Dialog")
+                                                            driver.execute_script("arguments[0].click();", popup_dialog)
+                                                            match["cmd_result"] = 1  # Everything OK
+                                                            match["result_str"] = "Ok Bet"  # Everything OK
+                                                        except:
+                                                            match["cmd_result"] = 2  # Bet Done, But latest Dialog not closed
+                                                            match["result_str"] = "Ok Bet, but Dialog not closed"
+                                                            pass
+                                                    except exceptions.ElementClickInterceptedException as e_intercep_bet:
+                                                        print(e_intercep_bet)
+                                                        match["cmd_result"] = 3  # Intercept odd btn
+                                                        match["result_str"] = "Intercept odd btn"
+                                                        print("Intercept Bet Element")
+                                                    except exceptions.StaleElementReferenceException as e_stale_bet:
+                                                        print(e_stale_bet)
+                                                        match["cmd_result"] = 3  # stale on bet element
+                                                        match["result_str"] = "Stale odd btn"
+                                                        print("Stale Bet Element")
+                                                    except Exception as e_bet:
+                                                        print(e_bet)
+                                                        try:
+                                                            clear_btn = WebDriverWait(driver, WAIT_SHORT).until(
+                                                                EC.presence_of_element_located(
+                                                                    (By.CLASS_NAME, 'c-btn--clear')))
+                                                            # webdriver.ActionChains(driver).move_to_element(clear_btn).click(clear_btn).perform()
+                                                            driver.execute_script("arguments[0].click();", clear_btn)
+                                                        except:
+                                                            pass
+                                                        match["cmd_result"] = 4  # error while bet
+                                                        match["result_str"] = "Cancel Bet"
+                                                        print("Canceled Bet")
+                                    except exceptions.StaleElementReferenceException as estale:
+                                        continue
+                                if data_bt == "1":
+                                    match["FT_HDP"].append(bet)
+                                elif data_bt == "3":
+                                    match["FT_OU"].append(bet)
+                                elif data_bt == "2":
+                                    match["FT_OE"].append(bet)
+                                # elif data_bt == "7":
+                                #     match["1H_HDP"].append(bet)
+                                # elif data_bt == "8":
+                                #     match["1H_OU"].append(bet)
+                match["FT_1X2"] = json.dumps(match["FT_1X2"])
+                match["FT_HDP"] = json.dumps(match["FT_HDP"])
+                match["FT_OU"] = json.dumps(match["FT_OU"])
+                match["FT_OE"] = json.dumps(match["FT_OE"])
+                match["NextGoal"] = json.dumps(match["NextGoal"])
+                if match_cmd["action_mode"] == ACTION_MODE_ODDS_ONLY:
+                    match['cmd_result'] = 1
+                    match['result_str'] = "Ok all odds"
+                # ------- End Scrap Odds ------------
+                print(f'{match["home_name"]} VS {match["away_name"]}')
+
+                # ======== Get statistic of this match ===========
+
+                if match_cmd["action_mode"] == ACTION_MODE_ODDS_STAT:
+                    try:
+                        stat_btn = match_dom.find_element(by=By.CLASS_NAME, value="c-btn--statistic")
+                        stat_btn.click()
+                        windows_cur = driver.window_handles
+                        window_stat = [x for x in windows_cur if x != window_deposit and x != window_odds][0]
+                        driver.switch_to.window(window_stat)
+                        WebDriverWait(driver, WAIT_MID).until(
+                            EC.frame_to_be_available_and_switch_to_it((By.XPATH, "//frame")))
+                        print("----> Entered frame of stat ", driver.title)
+                        # Execute Chrome dev tool command to obtain the mhtml file
+                        res = driver.execute_cdp_cmd('Page.captureSnapshot', {})
+                        # Write the file locally
+                        with open('./store/stat.mhtml', 'w', newline='') as f:
+                            f.write(res['data'])
+                        #========= click Show more buttons ======
+                        while True:
+                            try:
+                                showmore_btns = WebDriverWait(driver, WAIT_MID).until(
+                                    EC.presence_of_all_elements_located((By.XPATH, "//button[text()='Show more']")))
+                                btn_cnt = 0
+                                for showmore_btn in showmore_btns:
+                                    print("btn clicked ", btn_cnt)
+                                    showmore_btn.click()
+                                    time.sleep(1)
+                                    btn_cnt+= 1
+                            except Exception as e:
+                                print(e)
+                                break
+
+                        #======== Scrape Match history =========
+                        tables_1 = driver.find_elements(by=By.XPATH,
+                                                      value="//strong[text()='Last matches']//parent::div//parent::div//parent::div//parent::div//parent::div//parent::div//table")
+                        tables = WebDriverWait(driver, WAIT_MID).until(
+                            EC.presence_of_all_elements_located((By.XPATH, "//strong[text()='Last matches']//parent::div//parent::div//parent::div//parent::div//parent::div//parent::div//table")))
+                        print("-----> table_1 count ", len(tables_1))
+                        print("-----> table count ", len(tables))
+                        table_home = tables[0]
+                        table_away = tables[1]
+                        home_last_match_doms = table_home.find_elements(by=By.XPATH, value="tbody/tr/td[5]/div")
+                        away_last_match_doms = table_away.find_elements(by=By.XPATH, value="tbody/tr/td[5]/div")
+                        home_last_matches = []
+                        for last_m_dom in home_last_match_doms:
+                            home_name = last_m_dom.find_element(by=By.XPATH,
+                                                                value="div[1]/div/div/div/div/div").text
+                            home_score = last_m_dom.find_element(by=By.XPATH, value="div[2]/div/div/div[1]").text
+                            away_score = last_m_dom.find_element(by=By.XPATH, value="div[2]/div/div/div[3]").text
+                            away_name = last_m_dom.find_element(by=By.XPATH,
+                                                                value="div[3]/div/div/div/div/div").text
+                            last_match = {}
+                            last_match["home_name"] = home_name
+                            last_match["home_score"] = home_score
+                            last_match["away_score"] = away_score
+                            last_match["away_name"] = away_name
+                            home_last_matches.append(last_match)
+                        away_last_matches = []
+                        for last_m_dom in away_last_match_doms:
+                            home_name = last_m_dom.find_element(by=By.XPATH,
+                                                                value="div[1]/div/div/div/div/div").text
+                            home_score = last_m_dom.find_element(by=By.XPATH, value="div[2]/div/div/div[1]").text
+                            away_score = last_m_dom.find_element(by=By.XPATH, value="div[2]/div/div/div[3]").text
+                            away_name = last_m_dom.find_element(by=By.XPATH,
+                                                                value="div[3]/div/div/div/div/div").text
+                            last_match = {}
+                            last_match["home_name"] = home_name
+                            last_match["home_score"] = home_score
+                            last_match["away_score"] = away_score
+                            last_match["away_name"] = away_name
+                            away_last_matches.append(last_match)
+                        print("----> get stat successfully")
+                        match["last_matches"] = json.dumps({"home": home_last_matches, "away": away_last_matches})
+                        match["cmd_result"] = 1
+                        match["result_str"] = "Ok statistic info"
+                        #======== Close this page and back to Sports page
+                        time.sleep(1)
+
+                    except Exception as e_stat:
+                        print(e_stat)
+                        match["cmd_result"] = 2
+                        match["result_str"] = "exception in statistic"
+                        print("######### exception in statistic #########")
+
+                    if driver.title == "Statistic Info":
+                        driver.close()
+                        driver.switch_to.window(window_odds)
+
+                # -------- End Statistics ------------------------
+
+                # ========= Get Live Stats for live match =================
+                try:
+                    if match_cmd["action_mode"] == ACTION_MODE_ODDS_INPLAY:
+                        live_btn = match_dom.find_element(by=By.CLASS_NAME, value="c-btn--gv")
+                        live_btn.click()
+                        time.sleep(10)
+                        # Execute Chrome dev tool command to obtain the mhtml file
+                        res = driver.execute_cdp_cmd('Page.captureSnapshot', {})
+
+                        # Write the file locally
+                        with open('./store/live.mhtml', 'w', newline='') as f:
+                            f.write(res['data'])
+                        # WebDriverWait(driver, WAIT_LONG).until(EC.frame_to_be_available_and_switch_to_it(
+                        #     (By.XPATH, "//iframe[contains(@id, 'sportsFrame')]")))
+                        print("Entered Live Frame")
+                        live_stat = {}
+                        stat_element = driver.find_element(by=By.ID, value="stat_wrapper_inside")
+                        home_on_target = stat_element.find_element(by=By.CLASS_NAME, value="home_ontarget_stat")
+                        away_on_target = stat_element.find_element(by=By.CLASS_NAME, value="away_ontarget_stat")
+                        home_off_target = stat_element.find_element(by=By.CLASS_NAME, value="home_offtarget_stat")
+                        away_off_target = stat_element.find_element(by=By.CLASS_NAME, value="away_offtarget_stat")
+                        home_shoot_wood = stat_element.find_element(by=By.CLASS_NAME, value="home_shootwoodworks_stat")
+                        away_shoot_wood = stat_element.find_element(by=By.CLASS_NAME, value="away_shootwoodworks_stat")
+                        home_corner = stat_element.find_element(by=By.CLASS_NAME, value="home_corner_stat")
+                        away_corner = stat_element.find_element(by=By.CLASS_NAME, value="away_corner_stat")
+                        home_danger_freekick = stat_element.find_element(by=By.CLASS_NAME, value="home_dangerfreekick_stat")
+                        away_danger_freekick = stat_element.find_element(by=By.CLASS_NAME, value="away_dangerfreekick_stat")
+                        home_attacks = stat_element.find_element(by=By.CLASS_NAME, value="home_attacks_stat")
+                        away_attacks = stat_element.find_element(by=By.CLASS_NAME, value="away_attacks_stat")
+                        home_danger_attacks = stat_element.find_element(by=By.CLASS_NAME, value="home_dangerattacks_stat")
+                        away_danger_attacks = stat_element.find_element(by=By.CLASS_NAME, value="away_dangerattacks_stat")
+                        print("Scrapped all items")
+                        live_stat["on_target"] = {"home": home_on_target.text, "away": away_on_target.text}
+                        live_stat["off_target"] = {"home": home_off_target.text, "away": away_off_target.text}
+                        live_stat["shoot_wood"] = {"home": home_shoot_wood.text, "away": away_shoot_wood.text}
+                        live_stat["corner"] = {"home": home_corner.text, "away": away_corner.text}
+                        live_stat["danger_freekick"] = {"home": home_danger_freekick.text, "away": away_danger_freekick.text}
+                        live_stat["attacks"] = {"home": home_attacks.text, "away": away_attacks.text}
+                        live_stat["danger_attacks"] = {"home": home_danger_attacks.text, "away": away_danger_attacks.text}
+                        match["live_stat"] = json.dumps(live_stat)
+                        match["cmd_result"] = 1
+                        match["result_str"] = "Ok live stats"
+                        driver.back()
+                except Exception as e_live:
+                    print(e_live)
+                    match["cmd_result"] = 2
+                    match["result_str"] = "Exception live stats"
+                    print("######## Exception in Live stat #########")
+                # -------- End Live Stat -------------
+            break
+        except exceptions.StaleElementReferenceException as e_stale_total:
+            print("######### E_stale_total #########")
+            break
+        except Exception as e_total:
+            print(e_total)
+            break
+    return match
+
+def goToSportsPage(driver):
+    windows_current = driver.window_handles
+    try:
+        for window in windows_current:
+            driver.switch_to.window(window)
+            time.sleep(3)
+            if driver.title == "Sports":
+                driver.refresh()
+                WebDriverWait(driver, 60).until(
+                    EC.frame_to_be_available_and_switch_to_it((By.XPATH, "//iframe[contains(@id, 'sportsFrame')]")))
+                # try:
+                #     bet_slip = WebDriverWait(driver, WAIT_SHORT).until(
+                #     lambda driver: driver.find_element(by=By.XPATH,
+                #                             value="//div[contains(@class, 'c-side-betting__tab')]/div[text()='Bet Slip']"))
+                #     driver.execute_script("arguments[0].click();", bet_slip)
+                #     print("clicked bet slip")
+                # except:
+                #     pass
+                ft_1x2_dom = WebDriverWait(driver, WAIT_SHORT).until(
+                    lambda driver: driver.find_element(by=By.ID, value="lm_T_1_1X2"))
+                webdriver.ActionChains(driver).move_to_element(ft_1x2_dom).click(ft_1x2_dom).perform()
+                return 1
+    except:
+        pass
+    return 0
+
+def renavSport(driver):
+    try:
+        if driver.title == "Sports":
+            driver.close()
+        driver.switch_to.window(window_deposit)
+        driver.get('https://www.bk8mas.com/en-vn/sports/ibc')  #https://www.bk8mas.com/en-vn/sports/ibc
+        play_button = WebDriverWait(driver, WAIT_LONG).until(
+            lambda driver: driver.find_element(by=By.CSS_SELECTOR, value="div.bottom-content button"))
+        webdriver.ActionChains(driver).move_to_element(play_button).click(play_button).perform()
+        print("clicked ibc btn")
+        WebDriverWait(driver, WAIT_SHORT).until(EC.number_of_windows_to_be(2))
+
+        windows_after = driver.window_handles
+        window_odds = [x for x in windows_after if x != window_deposit][0]
+        driver.switch_to.window(window_odds)
+        #------ End Navigation to Sports page -------
+
+        # driver.get('file:///F:/workshop/CJI/2023/1106_betting/1.Req/webpage/SportsFund.mhtml')
+        print("waiting sports Frame")
+        WebDriverWait(driver, WAIT_LONG).until(
+                EC.frame_to_be_available_and_switch_to_it((By.XPATH, "//iframe[contains(@id, 'sportsFrame')]")))
+
+        #------- Close Notification Dialog -------
+        try:
+            dont_show =  WebDriverWait(driver, WAIT_MID).until(
+                    EC.presence_of_element_located((By.CLASS_NAME, 'galaxy-icon-checkbox')))
+            dont_show.click()
+            popup_dialog = WebDriverWait(driver, WAIT_MID).until(
+                EC.presence_of_element_located((By.CLASS_NAME, 'galaxy-intro__close-btn')))
+            popup_dialog.click()
+        except:
+            print("No notification dialog box")
+            pass
+
+        #------- Set As Decimal odd --------
+        try:
+            odd_type_text = WebDriverWait(driver, WAIT_MID).until(
+                EC.presence_of_element_located((By.XPATH,
+                                                "//div[contains(@class, 'c-dropdown--Decimal')]/div[contains(@class, 'c-dropdown__btn')]/span")))
+            if odd_type_text.text != "Decimal Odds":
+                print("no Decimal Odds")
+                odd_type = WebDriverWait(driver, WAIT_MID).until(
+                    lambda driver: driver.find_element(by=By.CLASS_NAME, value="c-dropdown--Decimal"))
+                # webdriver.ActionChains(driver).move_to_element(odd_type).click(odd_type).perform()
+                driver.execute_script("arguments[0].click();", odd_type)
+                print("clicked odd_type")
+                decimal_type = WebDriverWait(driver, WAIT_MID).until(
+                    lambda driver: driver.find_element(by=By.ID, value="oddsType_Decimal"))
+                # webdriver.ActionChains(driver).move_to_element(decimal_type).click(decimal_type).perform()
+                driver.execute_script("arguments[0].click();",  decimal_type)
+                print("clicked decimal_type")
+                print("Set Decimal Odds")
+        except Exception as e:
+            print("Could not set Decimal Odds")
+            print(e)
+        print("Navigated Sports Page")
+        goToFT_1X2(driver)
+        print("Navigated FT_1X2 Page")
+    except:
+        pass
+    return 0
+
+def goToFT_1X2(driver):
+    try:
+        try:
+            WebDriverWait(driver, WAIT_SHORT).until(
+                EC.frame_to_be_available_and_switch_to_it((By.XPATH, "//iframe[contains(@id, 'sportsFrame')]")))
+        except:
+            pass
+        # try:
+        #     bet_slip = WebDriverWait(driver, WAIT_SHORT).until(
+        #             lambda driver: driver.find_element(by=By.XPATH,
+        #                                     value="//div[contains(@class, 'c-side-betting__tab')]/div[text()='Bet Slip']"))
+        #     driver.execute_script("arguments[0].click();", bet_slip)
+        # except:
+        #     pass
+        ft_1x2_dom = WebDriverWait(driver, WAIT_SHORT).until(
+            lambda driver: driver.find_element(by=By.ID, value="lm_T_1_1X2"))
+        webdriver.ActionChains(driver).move_to_element(ft_1x2_dom).click(ft_1x2_dom).perform()
+        return 1
+    except Exception as e:
+        print(e)
+        return 0
+
+def goToAllOddPage(driver):
+    try:
+        try:
+            WebDriverWait(driver, WAIT_SHORT).until(
+                EC.frame_to_be_available_and_switch_to_it((By.XPATH, "//iframe[contains(@id, 'sportsFrame')]")))
+        except:
+            pass
+        # try:
+        #     bet_slip = WebDriverWait(driver, WAIT_SHORT).until(
+        #             lambda driver: driver.find_element(by=By.XPATH,
+        #                                     value="//div[contains(@class, 'c-side-betting__tab')]/div[text()='Bet Slip']"))
+        #     driver.execute_script("arguments[0].click();", bet_slip)
+        # except:
+        #     pass
+        all_odd_dom = WebDriverWait(driver, WAIT_SHORT).until(
+            lambda driver: driver.find_element(by=By.ID, value="lm_T_1_HDPOU1"))
+        webdriver.ActionChains(driver).move_to_element(all_odd_dom).click(all_odd_dom).perform()
+        print("navigated to all odd page")
+        return 1
+    except Exception as e:
+        print(e)
+        return 0
+
+def getBalance(driver):
+    try:
+        driver.refresh()
+        goToFT_1X2(driver)
+        dropdown_fund = WebDriverWait(driver, WAIT_MID).until(
+            lambda driver: driver.find_element(by=By.CLASS_NAME, value="c-btn--caret"))
+        # webdriver.ActionChains(driver).move_to_element(dropdown_fund).click(dropdown_fund).perform()
+        driver.execute_script("arguments[0].click();", dropdown_fund)
+        funds = driver.find_elements(by=By.XPATH,  value="//div[@id='AccountList']//span[contains(@class, 'c-text')]")
+        print("found fund element")
+        currency = ""
+        available_fund = 0
+        pending_fund = 0
+        i = 0
+        for fund in funds:
+            str_fund = fund.text
+            print(str_fund)
+            str_split = str_fund.split(" ")
+            currency = str_split[0]
+            if i == 1:
+                available_fund = float(str_split[1])
+            elif i == 3:
+                pending_fund = float(str_split[1])
+
+            i += 1
+        if i == 4:
+            return available_fund, pending_fund, currency
+        else:
+            return -1, -1, "Error"
+
+    except Exception as e:
+        print(e)
+        return -1, -1, "Error"
+
+
+# A thread that produces data
+def producer(cmd_queue):
+    while True:
+        cmd_list = []
+        # ==== POST match ==========
+        try:
+            api_url = api_endpoint + "command/"
+            response = requests.get(api_url, headers=api_header)
+            body = json.loads(response.text)
+            print(response.text)
+            cmd_list = body["data"]
+
+        except:
+            pass
+        # ----------------------------
+        cmd_1 = {
+            "bet_cmd_id": 1,
+            "op_cmd_id": -1,
+            "end_cmd": False,
+            "cmd_mode": CMD_MODE_ACTION_MATCH,
+            "action_mode": ACTION_MODE_ODDS_BET,
+            "league_name": "THAILAND LEAGUE 2",
+            "home_name": "Kasetsart FC",
+            "away_name": "Dragon Pathumwan Kanchanaburi",
+            "bets": [
+                {"data_bt": 5,
+                 "item": "1",
+                 "goal": "",
+                 "old_odd": "1.09",
+                 "bet_value": 5
+                 },
+                {"data_bt": 1,
+                 "item": "away",
+                 "goal": "0/0.5",
+                 "old_odd": "2.09",
+                 "bet_value": 50
+                 }
+            ]
+        }
+        cmd_2 = {
+            "bet_cmd_id": -1,
+            "op_cmd_id": 2,
+            "end_cmd": False,
+            "cmd_mode": CMD_MODE_ACTION_MATCH,
+            "action_mode": ACTION_MODE_ODDS_STAT,
+            "league_name": "*AFC ASIAN CUP 2023 (IN QATAR)",
+            "home_name": "Qatar",
+            "away_name": "Iran"
+        }
+        cmd_3 = {
+            "bet_cmd_id": -1,
+            "op_cmd_id": -1,
+            "end_cmd": False,
+            "cmd_mode": CMD_MODE_GET_ALL_MATCH
+        }
+        cmd_4 = {
+            "bet_cmd_id": -1,
+            "op_cmd_id": 4,
+            "end_cmd": False,
+            "cmd_mode": CMD_MODE_SPORTS_REFRESH  # go to Sport page and refresh
+        }
+        cmd_5 = {
+            "bet_cmd_id": -1,
+            "op_cmd_id": 5,
+            "end_cmd": False,
+            "cmd_mode": CMD_MODE_ALL_ODDS_PAGE   # go to all odd page
+        }
+        cmd_6 = {
+            "bet_cmd_id": -1,
+            "op_cmd_id": 6,
+            "end_cmd": False,
+            "cmd_mode": CMD_MODE_1X2_ODDS_PAGE  # go to ft_1x2 odd page
+        }
+        cmd_7 = {
+            "bet_cmd_id": -1,
+            "op_cmd_id": 7,
+            "end_cmd": False,
+            "cmd_mode": CMD_MODE_GET_BALANCE  # get balance
+        }
+        cmd_8 = {
+            "bet_cmd_id": -1,
+            "op_cmd_id": -1,
+            "end_cmd": False,
+            "cmd_mode": CMD_MODE_GET_LIVE_MATCHES
+        }
+        # cmd_queue.put(cmd_1)
+        # cmd_queue.put(cmd_2)
+        # cmd_queue.put(cmd_3)
+        # cmd_queue.put(cmd_7)
+        # cmd_queue.put(cmd_6)
+        # cmd_queue.put(cmd_5)
+        # cmd_queue.put(cmd_4)
+        for cmd in cmd_list:
+            cmd_queue.put(cmd)
+        if len(cmd_list) == 0:
+            cmd_queue.put(cmd_8)
+        cmd_queue.put({"end_cmd": True})
+        while True:
+            if cmd_queue.empty():
+                break
+        time.sleep(2)
+
+
+# A thread that consumes data
+def consumer(driver, cmd_queue, current_nav):
+    while True:
+        if cmd_queue.empty():
+            time.sleep(2)
+            continue
+        cmd = cmd_queue.get()
+        if cmd["end_cmd"] is False:
+            if cmd["cmd_mode"] == CMD_MODE_GET_ALL_MATCH: # get all matches with FT_1X2
+                print("Accept command all match")
+                if current_nav != 1:
+                    print(current_nav)
+                    if current_nav == 3:
+                        renavSport(driver)
+                    else:
+                        goToFT_1X2(driver)
+                    current_nav = 1
+                matches = getAllMatchFT_1X2(driver)
+                os.system('clear')
+                for match in matches:
+                    print("%-25s | %-25s %-5s %-5s %25s" % (match['home_name'], match['away_name'], match['home_score'], match['away_score'], match['FT_1X2']))
+                result = {}
+                result['bet_cmd_id'] = -1
+                result['op_cmd_id'] = cmd['op_cmd_id']
+                result['cmd_result'] = 1
+                result['result_str'] = "Ok all matches"
+                result['matches'] = matches
+                # ==== POST match ==========
+                try:
+                    api_url = api_endpoint + "matches/"
+                    response = requests.post(api_url, data=json.dumps(result), headers=api_header)
+                    print(response.text)
+                except:
+                    pass
+                # ----------------------------
+            elif cmd["cmd_mode"] == CMD_MODE_GET_LIVE_MATCHES: # get all live matches with FT_1X2
+                if current_nav != 1:
+                    print(current_nav)
+                    if current_nav == 3:
+                        renavSport(driver)
+                    else:
+                        goToFT_1X2(driver)
+                    current_nav = 1
+                matches = getAllMatchFT_1X2(driver, top_n=20)
+                os.system('clear')
+                for match in matches:
+                    print("%-25s | %-25s %-5s %-5s %25s" % (match['home_name'], match['away_name'], match['home_score'], match['away_score'], match['FT_1X2']))
+                result = {}
+                result['bet_cmd_id'] = -1
+                result['op_cmd_id'] = cmd['op_cmd_id']
+                result['cmd_result'] = 1
+                result['result_str'] = "Ok all matches"
+                result['matches'] = matches
+                # ==== POST match ==========
+                try:
+                    api_url = api_endpoint + "matches/"
+                    response = requests.post(api_url, data=json.dumps(result), headers=api_header)
+                    print(response.text)
+                except:
+                    pass
+                # ----------------------------
+            elif cmd["cmd_mode"] == CMD_MODE_SPORTS_REFRESH:  # Go To Sports page and refresh
+                # res = goToSportsPage(driver)
+                renavSport(driver)
+                current_nav = 1
+                time.sleep(2)
+                result = {
+                    "bet_cmd_id": cmd['bet_cmd_id'],
+                    "op_cmd_id": cmd['op_cmd_id'],
+                    "cmd_result": res,
+                    "result_str": ""
+                }
+                # ==== POST result ==========
+                try:
+                    api_url = api_endpoint + "match/"
+                    response = requests.post(api_url, data=json.dumps(result), headers=api_header)
+                    # print(response.text)
+                except:
+                    pass
+                # ----------------------------
+            elif cmd["cmd_mode"] == CMD_MODE_ALL_ODDS_PAGE:  # Go To All odd page
+                res = goToAllOddPage(driver)
+                if res == 1:
+                    current_nav = 2
+                time.sleep(2)
+                result = {
+                    "bet_cmd_id": cmd['bet_cmd_id'],
+                    "op_cmd_id": cmd['op_cmd_id'],
+                    "cmd_result": res,
+                    "result_str": ""
+                }
+                # ==== POST result ==========
+                try:
+                    api_url = api_endpoint + "match/"
+                    response = requests.post(api_url, data=json.dumps(result), headers=api_header)
+                    # print(response.text)
+                except:
+                    pass
+                # ----------------------------
+            elif cmd["cmd_mode"] == CMD_MODE_1X2_ODDS_PAGE: # Go to FT_1X2 page
+                res = goToFT_1X2(driver)
+                if res == 1:
+                    current_nav = 1
+                time.sleep(2)
+                result = {
+                    "bet_cmd_id": cmd['bet_cmd_id'],
+                    "op_cmd_id": cmd['op_cmd_id'],
+                    "cmd_result": res,
+                    "result_str": ""
+                }
+                # ==== POST result ==========
+                try:
+                    api_url = api_endpoint + "match/"
+                    response = requests.post(api_url, data=json.dumps(result), headers=api_header)
+                    # print(response.text)
+                except:
+                    pass
+                # ----------------------------
+            elif cmd["cmd_mode"] == CMD_MODE_GET_BALANCE: # Get balance
+                avail, pending, currency = getBalance(driver)
+                print(avail, pending, currency)
+                current_nav = 1
+                balance = {
+                    "currency": currency,
+                    "avail_fund": float(avail),
+                    "pending_fund": float(pending)
+                }
+                result = {
+                    "bet_cmd_id": cmd['bet_cmd_id'],
+                    "op_cmd_id": cmd['op_cmd_id'],
+                    "cmd_result": 1,
+                    "result_str": json.dumps(balance)
+                }
+                # ==== POST balance info ==========
+                try:
+                    # api_url = api_endpoint + "balance/"
+                    # response = requests.post(api_url, data=json.dumps(balance), headers=api_header)
+                    # # print(response.text)
+
+                    api_url = api_endpoint + "match/"
+                    response = requests.post(api_url, data=json.dumps(result), headers=api_header)
+                except:
+                    pass
+                # ----------------------------
+                time.sleep(2)
+            elif cmd["cmd_mode"] == CMD_MODE_PAGE_TITLE:
+                title = driver.title
+                result = {
+                    "bet_cmd_id": cmd['bet_cmd_id'],
+                    "op_cmd_id": cmd['op_cmd_id'],
+                    "cmd_result": 1,
+                    "result_str": title
+                }
+                # ==== POST result ==========
+                try:
+                    api_url = api_endpoint + "match/"
+                    response = requests.post(api_url, data=json.dumps(result), headers=api_header)
+                    # print(response.text)
+                except:
+                    pass
+                # ----------------------------
+                time.sleep(2)
+            elif cmd["cmd_mode"] == CMD_MODE_ACTION_MATCH:
+                if current_nav != 2:
+                    goToAllOddPage(driver)
+                    current_nav = 2
+                if cmd["action_mode"] == ACTION_MODE_ODDS_BET:
+                    current_nav = 3
+                match = driverAction(driver, cmd)
+                if match:
+                    # ==== POST match with cmd result ==========
+                    try:
+                        api_url = api_endpoint + "match/"
+                        response = requests.post(api_url, data=json.dumps(match), headers=api_header)
+                        print(response.text)
+                    except:
+                        pass
+                    # ----------------------------
+
+def interface():
+    while True:
+        cmd_num = input("Command number: ")
+        if cmd_num == "0":
+            print("Command number input")
+        elif cmd_num == "1":
+            break
+
+
+
+# -------- navigate to odds page -------
+driver.get('https://www.bk8mas.com/en-vn/login')
+print("Navigated log in page")
+try:
+    print("Waiting nav-myacc first")
+    myElem = WebDriverWait(driver, WAIT_SHORT).until(EC.presence_of_element_located((By.CLASS_NAME, 'nav-myacc')))
+except:
+    input_group = WebDriverWait(driver, WAIT_LONG).until(
+        lambda driver: driver.find_elements(by=By.TAG_NAME, value="input"))
+    for input in input_group:
+        type = input.get_attribute('type')
+        if type == "text":
+            input.send_keys(USERNAME)
+        elif type == "password":
+            input.send_keys(PASSWORD)
+
+    webdriver.ActionChains(driver).send_keys(Keys.RETURN).perform()
+    print("Entered credentials")
+    time.sleep(WAIT_SHORT)
+
+try:
+    print("Waiting nav-myacc second")
+    myElem = WebDriverWait(driver, WAIT_LONG).until(EC.presence_of_element_located((By.CLASS_NAME, 'nav-myacc')))
+    time.sleep(10)
+    # Execute Chrome dev tool command to obtain the mhtml file
+    res = driver.execute_cdp_cmd('Page.captureSnapshot', {})
+
+    # Write the file locally
+    with open('./store/deposit.mhtml', 'w', newline='') as f:
+        f.write(res['data'])
+
+    window_deposit = driver.current_window_handle
+    driver.get('https://www.bk8mas.com/en-vn/sports/ibc')  #https://www.bk8mas.com/en-vn/sports/ibc
+    play_button = WebDriverWait(driver, WAIT_LONG).until(
+        lambda driver: driver.find_element(by=By.CSS_SELECTOR, value="div.bottom-content button"))
+    webdriver.ActionChains(driver).move_to_element(play_button).click(play_button).perform()
+    print("clicked ibc btn")
+    WebDriverWait(driver, WAIT_SHORT).until(EC.number_of_windows_to_be(2))
+
+    windows_after = driver.window_handles
+    window_odds = [x for x in windows_after if x != window_deposit][0]
+    driver.switch_to.window(window_odds)
+    #------ End Navigation to Sports page -------
+
+    # driver.get('file:///F:/workshop/CJI/2023/1106_betting/1.Req/webpage/SportsFund.mhtml')
+    print("waiting sports Frame")
+    WebDriverWait(driver, WAIT_LONG).until(
+            EC.frame_to_be_available_and_switch_to_it((By.XPATH, "//iframe[contains(@id, 'sportsFrame')]")))
+
+    #------- Close Notification Dialog -------
+    try:
+        dont_show =  WebDriverWait(driver, WAIT_MID).until(
+                EC.presence_of_element_located((By.CLASS_NAME, 'galaxy-icon-checkbox')))
+        dont_show.click()
+        popup_dialog = WebDriverWait(driver, WAIT_MID).until(
+            EC.presence_of_element_located((By.CLASS_NAME, 'galaxy-intro__close-btn')))
+        popup_dialog.click()
+    except:
+        print("No notification dialog box")
+        pass
+
+    #------- Set As Decimal odd --------
+    try:
+        odd_type_text = WebDriverWait(driver, WAIT_MID).until(
+            EC.presence_of_element_located((By.XPATH,
+                                            "//div[contains(@class, 'c-dropdown--Decimal')]/div[contains(@class, 'c-dropdown__btn')]/span")))
+        if odd_type_text.text != "Decimal Odds":
+            print("no Decimal Odds")
+            odd_type = WebDriverWait(driver, WAIT_MID).until(
+                lambda driver: driver.find_element(by=By.CLASS_NAME, value="c-dropdown--Decimal"))
+            # webdriver.ActionChains(driver).move_to_element(odd_type).click(odd_type).perform()
+            driver.execute_script("arguments[0].click();", odd_type)
+            print("clicked odd_type")
+            decimal_type = WebDriverWait(driver, WAIT_MID).until(
+                lambda driver: driver.find_element(by=By.ID, value="oddsType_Decimal"))
+            # webdriver.ActionChains(driver).move_to_element(decimal_type).click(decimal_type).perform()
+            driver.execute_script("arguments[0].click();",  decimal_type)
+            print("clicked decimal_type")
+            print("Set Decimal Odds")
+    except Exception as e:
+        print("Could not set Decimal Odds")
+        print(e)
+    print("Navigated Sports Page")
+    goToFT_1X2(driver)
+    current_nav = 1
+    print("Navigated FT_1X2 Page")
+    # Create the shared queue and launch both threads
+    cmd_queue = Queue()
+    t1 = Thread(target=consumer, args=(driver, cmd_queue, current_nav))
+    t2 = Thread(target=producer, args=(cmd_queue,))
+    t1.start()
+    t2.start()
+except Exception as e:
+    print("Exception occured")
+    print(e)
+    driver.close()
+    driver.quit()
